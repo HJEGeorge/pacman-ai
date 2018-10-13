@@ -33,8 +33,6 @@ import random
 import game
 import util
 
-
-from sets im
 # RandomAgent
 #
 # A very simple agent. Just makes a random pick every time that it is
@@ -174,13 +172,16 @@ class CornerSeekingAgent(Agent):
 
     def __init__(self):
         self.been = set()
+        self.target = tuple()
 
     def getAction(self, state):
         location = api.whereAmI(state)
         self.been.add(location)
         corners = api.corners(state)
-        for corner in corners:
-            if corner not in self.been:
+        if location == self.target:            
+            for corner in corners:
+                if corner not in self.been:
+                    self.target = corner
 
         directions = getDirectionsTo(closest, location)
         print( location, directions, closest, distance_to_closest)
