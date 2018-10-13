@@ -172,26 +172,45 @@ class CornerSeekingAgent(Agent):
 
     def __init__(self):
         self.been = set()
-        self.target = tuple()
+        self.target = None
+        self.direction = Directions.STOP
 
     def getAction(self, state):
         location = api.whereAmI(state)
         self.been.add(location)
         corners = api.corners(state)
-        if location == self.target:            
-            for corner in corners:
-                if corner not in self.been:
-                    self.target = corner
-
-        directions = getDirectionsTo(closest, location)
-        print( location, directions, closest, distance_to_closest)
-        for direction in directions:
-            if direction in legal:
-                return api.makeMove(direction, legal)
+        legal = api.legalActions(state)
+        if location == self.target or not self.target:
+            unseen_corners = [corner for corner in corners if corner not in self.been]
+            if any(unseen_corners):
+                self.target = unseen_corners[0]
+            else:
+                self.target = None
+        if self.target:
+            print(self.target)
+            directions = getDirectionsTo(self.target, location)
+            if self.direction in directions and self.direction in legal:
+                return api.makeMove(self.direction, legal)
+            for direction in directions:
+                if direction in legal and nextLocation(direction, location) not in self.been:
+                    self.direction = direction
+                    return api.makeMove(direction, legal)
+            for direction in directions:
+                if direction in legal:
+                    self.direction = direction
+                    return api.makeMove(direction, legal)
         if Directions.STOP in legal:
             legal.remove(Directions.STOP)
+
+        for direction in legal:
+            print(direction, self.been, nextLocation(direction, location))
+            if nextLocation(direction, location) not in self.been:
+                self.direction = direction
+                return api.makeMove(direction, legal)
         # Random choice between the legal options.
-        return api.makeMove(random.choice(legal), legal)
+        random_direction = random.choice(legal)
+        self.direction = random_direction
+        return api.makeMove(random_direction, legal)
 
 
 def getDirectionsTo(target, location):
@@ -205,6 +224,22 @@ def getDirectionsTo(target, location):
     elif target[1] - location[1] < 0:
         directions.append(Directions.SOUTH)
     return directions
+
+
+def nextLocation(direction, location):
+    if direction == Directions.EAST:
+        return (location[0] + 1, location[1])
+    elif direction == Directions.WEST:
+        return (location[0] - 1, location[1])
+    elif direction == Directions.NORTH:
+        return (location[0], location[1] + 1)
+    elif direction == Directions.SOUTH:
+        return (location[0], location[1] - 1)
+    elif direction == Directions.STOP:
+        return location
+    else:
+        raise NotImplementedError
+
 
 class SurvivalAgent(Agent):
 
