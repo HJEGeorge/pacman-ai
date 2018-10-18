@@ -226,6 +226,13 @@ def getDirectionsTo(target, location):
     return directions
 
 
+def getDirectionsAwayFrom(enemy, location):
+    wrong_directions = getDirectionsTo(enemy, location)
+    all_directions = [Directions.EAST, Directions.WEST, Directions.NORTH, Directions.SOUTH]
+    directions = [x for x in all_directions if x not in wrong_directions]
+    return directions
+
+
 def nextLocation(direction, location):
     if direction == Directions.EAST:
         return (location[0] + 1, location[1])
@@ -250,3 +257,5 @@ class SurvivalAgent(Agent):
 
         # Else go away from closest ghost
         return True
+
+
