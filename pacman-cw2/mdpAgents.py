@@ -35,13 +35,26 @@ import random
 import game
 import util
 
+# Preset Map Values
+class MapValues:
+    GhostValue = -10
+    EdibleGhostValue = 5
+    NullValue = 0
+    FoodValue = 1
+
+# MDP variables
+class MDPValues:
+    gamma = 0.75
+    threshold = 0.01
+
+
 class MDPAgent(Agent):
 
     # Constructor: this gets run when we first invoke pacman.py
     def __init__(self):
         print "Starting up MDPAgent!"
         name = "Pacman"
-        self.map = dict()
+        self.map = Map()
 
     # Gets run after an MDPAgent object is created and once there is
     # game state to access.
@@ -49,7 +62,10 @@ class MDPAgent(Agent):
         print "Running registerInitialState for MDPAgent!"
         print "I'm at:"
         print api.whereAmI(state)
-        self.map = fill_map()
+        corners = api.corners(state)
+        (width, height) = sorted(corners, key=lambda x: util.manhattanDistance((0, 0), x), reverse=True)[0]
+        self.map.initialise(height, width, api.walls(state))
+        self.map.display()
         
     # This is what gets run in between multiple games
     def final(self, state):
@@ -171,54 +187,81 @@ def directional_weight(base, point):
         Directions.WEST: west
     }
 
-
-# Creates a graph of the traversible points on the map (as an adjacency set within a set)
-def fill_map(state):
-    unvisited = {}
-    corners = api.corners(state)
-    walls = api.walls(state)
-
-    # Add all nodes that aren't walls ( Assume all pacman layouts are rectangular and start at (0,0) )
-    dimensions = sorted(corners, key=lambda x: util.manhattanDistance((0, 0), x), reverse=True)[0]
-    for x in range(0, dimensions[0] + 1):
-        for y in range(0, dimensions[1] + 1):
-            if (x, y) not in walls:
-                unvisited[(x, y)] = Node((x, y))
-
-    # Add neighbors to each node
-    keys = unvisited.iterkeys()
-    for key in keys:
-        unvisited[key].connected = [node for node in unvisited.values() if node.distance(unvisited[key]) == 1]
-
-    # Return map
-    return unvisited
-
-
 # An object to represent each node in the graph generated
 class Node():
     # A list of all neighboring nodes
     connected = []
 
-    def __init__(self, value):
+    def __init__(self, position, value=MapValues.NullValue):
+        self.position = position
         self.value = value
-        self.seen = False
 
     # The minimum distance from one point to another |x_1 - x_2| + |y_1 - y_2|
-    def distance(self, other):
-        return util.manhattanDistance(self.value, other.value)
+    def minimumDistance(self, other):
+        return util.manhattanDistance(self.whichNode(), other.whichNode())
 
-    # Simple BFS to find distance to nearest unseen food
-    # Returns 0 if this point is unvisited, 1 if one of it's neighbors is unvisited, etc...
-    def distance_to_unseen(self):
-        if self.seen == False:
-            return 0
-        queue = [(self, [self])]
-        while queue:
-            (vertex, path) = queue.pop(0)
-            for next in set(vertex.connected) - set(path):
-                if not next.seen:
-                    return len(path)
+    def getValue(self):
+        return self.value
+
+    def whichNode(self):
+        return self.position
+
+    def setValue(self, value):
+        self.value = value
+
+    def printNode(self):
+        character = "?"
+        if self.value == MapValues.EdibleGhostValue:
+            character = "O"
+        elif self.value == MapValues.FoodValue:
+            character = "."
+        elif self.value == MapValues.GhostValue:
+            character = "X"
+        print character,
+
+
+
+class Map():
+
+    def __init__(self):
+        self._map = dict()
+        self._height = 0
+        self._width = 0
+
+    # Sets the base state of the map
+    def initialise(self, height, width, walls):
+        self._height = height
+        self._width = width
+        for x in range(0, width + 1):
+            for y in range(0, height + 1):
+                if (x, y) not in walls:
+                    self._map[(x, y)] = Node((x, y))
+
+        keys = self._map.iterkeys()
+        for key in keys:
+            # This can be optimised
+            self._map[key].connected = [node for node in self._map.values() if node.minimumDistance(self._map[key]) == 1]
+
+    def display(self):
+        for x in range(0, self.getWidth()):
+            for y in range(0, self.getHeight()):
+                if self._map.get((x, y), None):
+                    self._map.get((x, y)).printNode()
                 else:
-                    queue.append((next, path + [next]))
-        raise NotImplementedError('No unvisited points remain but game not complete.')
+                    print u"\u2610",
+            print
+
+    # Here x and y are indices.
+    def setValue(self, x, y, value):
+        self._map[(x, y)].setValue(value)
+
+    def getValue(self, x, y):
+        return self._map[(x , y)].getValue()
+
+    # Return width and height
+    def getHeight(self):
+        return self._height + 1
+
+    def getWidth(self):
+        return self._width + 1
 
