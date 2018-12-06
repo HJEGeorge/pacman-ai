@@ -28,12 +28,13 @@
 # The agent here is was written by Henry George, based on the code in
 # pacmanAgents.py
 
-from pacman import Directions
-from game import Agent
-import api
 import random
-import game
+
+import api
 import util
+from game import Agent
+from pacman import Directions
+
 
 # Preset Map Values
 class MapValues:
@@ -42,10 +43,12 @@ class MapValues:
     NullValue = 0
     FoodValue = 1
 
+
 # MDP variables
 class MDPValues:
     gamma = 0.75
     threshold = 0.01
+    directionProb = 0.8
 
 
 class MDPAgent(Agent):
@@ -66,7 +69,7 @@ class MDPAgent(Agent):
         (width, height) = sorted(corners, key=lambda x: util.manhattanDistance((0, 0), x), reverse=True)[0]
         self.map.initialise(height, width, api.walls(state))
         self.map.display()
-        
+
     # This is what gets run in between multiple games
     def final(self, state):
         print "Looks like the game just ended!"
@@ -80,68 +83,6 @@ class MDPAgent(Agent):
         # Random choice between the legal options.
         return api.makeMove(random.choice(legal), legal)
 
-class PartialAgent(Agent):
-
-    # Initialises agent
-    def __init__(self):
-        print "Initialising!"
-        name = "Utilitarian Pacman"
-        # A map of all traversable points, and their status (seen/unseen)
-        self.map = dict()
-
-    # Runs between games
-    def final(self, state):
-        print "Game Over"
-        # De-initialise map for multiple runs
-        self.map = None
-
-    # A utility maximising function, which attempts to choose the most beneficial action based on the environment context
-    def getAction(self, state):
-
-        # Builds a map of traversable points for each map given its dimension
-        if not self.map:
-            self.map = fill_map(state)
-
-        location = api.whereAmI(state)
-        # Sets the current location as visited, so that unvisited points are up to date
-        self.map[location].seen = True
-
-        # It is never beneficial to stop in this version of the game
-        legal = api.legalActions(state)
-        if Directions.STOP in legal:
-            legal.remove(Directions.STOP)
-
-        # Calculates the utility of each action (direction in legal), and selects the action which maximises this utility
-        utility = [(calculate_utility(direction, self.map, state), direction) for direction in legal]
-        utility.sort(key=lambda x: x[0], reverse=True)
-        return api.makeMove(utility[0][1], legal)
-
-### Utility Functions (Business Logic) ###
-
-
-# Calculate Utility of direction by combining utility of various variables given their associated weights
-def calculate_utility(direction, map, state):
-    next_location = nextLocation(direction, api.whereAmI(state))
-    # Since a longer path is worse, we negate it
-    unseen_value = - map[next_location].distance_to_unseen()
-    utility = UTILITY['unseen'] * unseen_value \
-              + UTILITY['ghost'] * ghost_value(direction, state)
-    return utility
-
-
-# Calculate the danger of ghosts in a specific direction, returns a value between 0-1
-# If the ghost is 2 north and 2 east, then each of north and east are 1/2 danger, if ghost is 3 north and 1 east, north is 3/4 danger, and east is 1/4 danger.
-def ghost_value(direction, state):
-    ghosts = api.ghosts(state)
-    location = api.whereAmI(state)
-    danger = 0
-    for ghost in ghosts:
-        distance = util.manhattanDistance(location, ghost)
-        if distance:
-            danger += directional_weight(location, ghost)[direction] / distance
-        else:
-            danger += float('inf')
-    return danger
 
 ### Helper Functions and Architecture ###
 
@@ -161,64 +102,38 @@ def nextLocation(direction, location):
         raise NotImplementedError
 
 
-# Calculate the positive distance in each of North, South, East, West from base to point
-def directional_weight(base, point):
-    north, south, east, west = 0, 0, 0, 0
-
-    # X-axis calculation
-    x = base[0] - point[0]
-    if x > 0:
-        west = x
-    else:
-        east = -x
-
-    # Y-axis calculation
-    y = base[1] - point[1]
-    if y > 0:
-        south = y
-    else:
-        north = -y
-
-    # Return a dictionary of distances in each direction
-    return {
-        Directions.NORTH: north,
-        Directions.SOUTH: south,
-        Directions.EAST: east,
-        Directions.WEST: west
-    }
-
 # An object to represent each node in the graph generated
 class Node():
     # A list of all neighboring nodes
     connected = []
 
-    def __init__(self, position, value=MapValues.NullValue):
+    def __init__(self, position, reward=MapValues.NullValue, punishment=MapValues.NullValue):
         self.position = position
-        self.value = value
+        self.reward = reward  # Food can be updated simply, with a 'did I eat this move?'.
+        self.punishment = punishment  # Ghost position and effect changes dramatically so needs to be completely rebuilt
 
     # The minimum distance from one point to another |x_1 - x_2| + |y_1 - y_2|
     def minimumDistance(self, other):
         return util.manhattanDistance(self.whichNode(), other.whichNode())
 
     def getValue(self):
-        return self.value
+        return self.reward
 
     def whichNode(self):
         return self.position
 
     def setValue(self, value):
-        self.value = value
+        self.reward = value
 
     def printNode(self):
         character = "?"
-        if self.value == MapValues.EdibleGhostValue:
+        if self.reward == MapValues.EdibleGhostValue:
             character = "O"
-        elif self.value == MapValues.FoodValue:
+        elif self.reward == MapValues.FoodValue:
             character = "."
-        elif self.value == MapValues.GhostValue:
+        elif self.punishment == MapValues.GhostValue:
             character = "X"
         print character,
-
 
 
 class Map():
@@ -240,7 +155,8 @@ class Map():
         keys = self._map.iterkeys()
         for key in keys:
             # This can be optimised
-            self._map[key].connected = [node for node in self._map.values() if node.minimumDistance(self._map[key]) == 1]
+            self._map[key].connected = [node for node in self._map.values() if
+                                        node.minimumDistance(self._map[key]) == 1]
 
     def display(self):
         for x in range(0, self.getWidth()):
@@ -256,7 +172,7 @@ class Map():
         self._map[(x, y)].setValue(value)
 
     def getValue(self, x, y):
-        return self._map[(x , y)].getValue()
+        return self._map[(x, y)].getValue()
 
     # Return width and height
     def getHeight(self):
@@ -265,3 +181,69 @@ class Map():
     def getWidth(self):
         return self._width + 1
 
+
+class DirectionalLocation():
+    """At least two of the three initial parameters should be given"""
+
+    def __init__(self, position=None, direction=None, nextPosition=None):
+        self._position = position
+        self._direction = direction
+        self._nextPosition = nextPosition
+
+    @property
+    def nextPosition(self):
+        if self._nextPosition is not None:
+            return self._nextPosition
+        else:
+            if self._direction == Directions.EAST:
+                self._nextPosition = (self._position[0] + 1, self._position[1])
+            elif self._direction == Directions.WEST:
+                self._nextPosition = (self._position[0] - 1, self._position[1])
+            elif self._direction == Directions.NORTH:
+                self._nextPosition = (self._position[0], self._position[1] + 1)
+            elif self._direction == Directions.SOUTH:
+                self._nextPosition = (self._position[0], self._position[1] - 1)
+            elif self._direction == Directions.STOP:
+                self._nextPosition = self._position
+            else:
+                raise NotImplementedError
+            return self._nextPosition
+
+    @property
+    def direction(self):
+        if self._direction is not None:
+            return self._direction
+        else:
+            if util.manhattanDistance(self._position, self._nextPosition) != 1:
+                self._direction = Directions.STOP
+            elif self._nextPosition[0] - self._position[0] == 1:
+                self._direction = Directions.EAST
+            elif self._nextPosition[0] - self._position[0] == -1:
+                self._direction = Directions.WEST
+            elif self._nextPosition[1] - self._position[1] == 1:
+                self._direction = Directions.NORTH
+            elif self._nextPosition[1] - self._position[1] == -1:
+                self._direction = Directions.SOUTH
+            else:
+                raise NotImplementedError
+            return self._direction
+
+
+    @property
+    def position(self):
+        if self._position is not None:
+            return self._position
+        else:
+            if self._direction == Directions.EAST:
+                self._position = (self._nextPosition[0] - 1, self._nextPosition[1])
+            elif self._direction == Directions.WEST:
+                self._position = (self._nextPosition[0] + 1, self._nextPosition[1])
+            elif self._direction == Directions.NORTH:
+                self._position = (self._nextPosition[0], self._nextPosition[1] - 1)
+            elif self._direction == Directions.SOUTH:
+                self._position = (self._nextPosition[0], self._nextPosition[1] + 1)
+            elif self._direction == Directions.STOP:
+                self._position = self._nextPosition
+            else:
+                raise NotImplementedError
+            return self._position
