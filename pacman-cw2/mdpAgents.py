@@ -39,12 +39,12 @@ DEBUG = False
 
 # It was unsure whether pacman should be allowed to stop if this is ever the optimal move. This happens very
 # little in practice, but the option to toggle is here in case
-CAN_STOP = False
+CAN_STOP = True
 
 # Preset Map Values
 class MapValues:
     GhostValue = -5 # Amount of danger for a ghost
-    EdibleGhostValue = 5 # This was not implemented
+    EdibleGhostValue = 2 # This was not implemented
     NullValue = 0 # This is the Null value for positive/negative reward - DO NOT CHANGE
     FoodValue = 1 # Reward gained from eating food
     NullPunishmentValue = -0.1 # Punishment for any given empty square
