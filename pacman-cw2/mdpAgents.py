@@ -29,8 +29,9 @@
 # pacmanAgents.py
 
 import random
-
+import time
 import api
+import math
 import util
 from game import Agent
 from pacman import Directions
@@ -38,17 +39,18 @@ from pacman import Directions
 
 # Preset Map Values
 class MapValues:
-    GhostValue = -10
+    GhostValue = -30
     EdibleGhostValue = 5
     NullValue = 0
-    FoodValue = 1
+    FoodValue = 10
+    NullPunishmentValue = -1
 
 
 # MDP variables
 class MDPValues:
-    gamma = 0.75
-    threshold = 0.01
-    directionProb = 0.8
+    Gamma = 0.99
+    Threshold = 0.01
+    DirectionNoise = 0.8
 
 
 class MDPAgent(Agent):
@@ -63,12 +65,10 @@ class MDPAgent(Agent):
     # game state to access.
     def registerInitialState(self, state):
         print "Running registerInitialState for MDPAgent!"
-        print "I'm at:"
-        print api.whereAmI(state)
         corners = api.corners(state)
         (width, height) = sorted(corners, key=lambda x: util.manhattanDistance((0, 0), x), reverse=True)[0]
         self.map.initialise(height, width, api.walls(state))
-        self.map.display()
+        self.map.initialiseRewards(api.food(state))
 
     # This is what gets run in between multiple games
     def final(self, state):
@@ -76,54 +76,55 @@ class MDPAgent(Agent):
 
     # For now I just move randomly
     def getAction(self, state):
-        # Get the actions we can try, and remove "STOP" if that is one of them.
+        ghosts = api.ghosts(state)
+        self.map.updatePunishments(ghosts)
+        location = api.whereAmI(state)
+        self.map.updateRewards(location)
+        self.map.updateUtilities()
         legal = api.legalActions(state)
         if Directions.STOP in legal:
             legal.remove(Directions.STOP)
-        # Random choice between the legal options.
-        return api.makeMove(random.choice(legal), legal)
+        return api.makeMove(self.map.optimalMove(location, legal), legal)
 
 
 ### Helper Functions and Architecture ###
 
-# Return the co-ordinates of the location caused by travelling in a certain direction (does not check for legality).
-def nextLocation(direction, location):
-    if direction == Directions.EAST:
-        return (location[0] + 1, location[1])
-    elif direction == Directions.WEST:
-        return (location[0] - 1, location[1])
-    elif direction == Directions.NORTH:
-        return (location[0], location[1] + 1)
-    elif direction == Directions.SOUTH:
-        return (location[0], location[1] - 1)
-    elif direction == Directions.STOP:
-        return location
-    else:
-        raise NotImplementedError
-
-
 # An object to represent each node in the graph generated
 class Node():
     # A list of all neighboring nodes
-    connected = []
 
-    def __init__(self, position, reward=MapValues.NullValue, punishment=MapValues.NullValue):
+
+    def __init__(self, position, reward=MapValues.NullValue, punishment=MapValues.NullPunishmentValue):
         self.position = position
         self.reward = reward  # Food can be updated simply, with a 'did I eat this move?'.
         self.punishment = punishment  # Ghost position and effect changes dramatically so needs to be completely rebuilt
+        self.utility = reward + punishment
+        self.connected = []
+        self.directionallyConnected = []
+        self.directionProbabilities = {}
+
 
     # The minimum distance from one point to another |x_1 - x_2| + |y_1 - y_2|
     def minimumDistance(self, other):
         return util.manhattanDistance(self.whichNode(), other.whichNode())
 
     def getValue(self):
-        return self.reward
+        return self.reward + self.punishment
 
     def whichNode(self):
         return self.position
 
-    def setValue(self, value):
+    def setReward(self, value):
         self.reward = value
+
+    def setPunishment(self, value):
+        self.punishment = value
+
+    def updatePunishment(self, value):
+        self.punishment += value
+
+    def rewardFunction(self):
+        return self.reward + self.punishment
 
     def printNode(self):
         character = "?"
@@ -134,6 +135,36 @@ class Node():
         elif self.punishment == MapValues.GhostValue:
             character = "X"
         print character,
+
+    def printNodeUtility(self):
+        print str(round(self.utility)) + '(' + str(int(self.reward)) +  ',' + str(int(self.punishment)) + ')\t',
+
+    def legalDirections(self):
+        if not len(self.directionallyConnected):
+            for node in self.connected:
+                self.directionallyConnected.append(
+                    DirectionalLocation(position=self.position, nextPosition=node.position)
+                )
+        return self.directionallyConnected
+
+    def probabilities(self, direction):
+        if not self.directionProbabilities:
+            self.initialiseDirectionProbabilities()
+        return self.directionProbabilities[direction.nextPosition]
+
+    def initialiseDirectionProbabilities(self):
+        legal = self.legalDirections()
+        for attemptedAction in legal:
+            self.directionProbabilities[attemptedAction.nextPosition] = {}
+            self.directionProbabilities[attemptedAction.nextPosition][attemptedAction.nextPosition] = MDPValues.DirectionNoise
+            adjacent = attemptedAction.adjacentTo()
+            self.directionProbabilities[attemptedAction.nextPosition][self.position] = 0
+            for probableMove in adjacent:
+                probableDirectionLocation = DirectionalLocation(direction=probableMove, position=self.position)
+                if probableMove in [move.direction for move in legal]:
+                    self.directionProbabilities[attemptedAction.nextPosition][probableDirectionLocation.nextPosition] = ( 1 - MDPValues.DirectionNoise ) / len(adjacent)
+                else:
+                    self.directionProbabilities[attemptedAction.nextPosition][self.position] += ( 1 - MDPValues.DirectionNoise ) / len(adjacent)
 
 
 class Map():
@@ -159,20 +190,30 @@ class Map():
                                         node.minimumDistance(self._map[key]) == 1]
 
     def display(self):
-        for x in range(0, self.getWidth()):
-            for y in range(0, self.getHeight()):
+        for y in range(0, self.getHeight())[::-1]:
+            for x in range(0, self.getWidth()):
                 if self._map.get((x, y), None):
                     self._map.get((x, y)).printNode()
                 else:
                     print u"\u2610",
             print
 
-    # Here x and y are indices.
-    def setValue(self, x, y, value):
-        self._map[(x, y)].setValue(value)
 
-    def getValue(self, x, y):
-        return self._map[(x, y)].getValue()
+    def displayUtilities(self):
+        for y in range(0, self.getHeight())[::-1]:
+            for x in range(0, self.getWidth()):
+                if self._map.get((x, y), None):
+                    self._map.get((x, y)).printNodeUtility()
+                else:
+                    print u"\u2610\t",
+            print
+
+    # Here x and y are indices.
+    def setReward(self, position, value):
+        self._map[(position[0], position[1])].setReward(value)
+
+    def getValue(self, position):
+        return self._map[(position[0], position[1])].getValue()
 
     # Return width and height
     def getHeight(self):
@@ -181,6 +222,67 @@ class Map():
     def getWidth(self):
         return self._width + 1
 
+    def updateUtilities(self):
+        terminalIteration = False
+        while not terminalIteration:
+            threshholdHolds = True
+            # Each iteration of Value Iteration
+            for position in self._map.keys():
+                node = self._map.get(position)
+                actionUtilities = []
+                for action in node.legalDirections():
+                    states = []
+                    for state in node.probabilities(action).keys():
+                        states.append(node.probabilities(action)[state] * self._map.get(state).utility)
+                    actionUtility = sum(states)
+                    actionUtilities.append(actionUtility)
+                utility = node.rewardFunction() + MDPValues.Gamma * max(actionUtilities)
+                if abs(utility - node.utility) > MDPValues.Threshold:
+                    threshholdHolds = False
+                node.utility = utility
+            terminalIteration = threshholdHolds
+
+
+    def initialiseRewards(self, food):
+        for piece in food:
+            self.setReward(piece, MapValues.FoodValue)
+
+
+    def updateRewards(self, position):
+        self.setReward(position, MapValues.NullValue)
+
+
+    def updatePunishments(self, ghosts):
+        seen = []
+        for ghost in ghosts:
+            positions = floatPositionToIntegers(ghost)
+            for position in positions:
+                start = self._map.get(position)
+                if start not in seen:
+                    start.setPunishment(MapValues.GhostValue)
+                    seen.append(start)
+                else:
+                    start.updatePunishment(MapValues.GhostValue)
+                neighbors = start.connected
+                for node in neighbors:
+                    amount = MapValues.GhostValue / len(neighbors)
+                    if node not in seen:
+                        node.setPunishment(amount)
+                        seen.append(node)
+                    else:
+                        node.updatePunishment(amount)
+                    for secondNeighbor in node.connected:
+                        if secondNeighbor not in seen:
+                            secondNeighbor.setPunishment(MapValues.NullPunishmentValue)
+
+
+    def optimalMove(self, position, legal):
+        moves = []
+        node = self._map.get(position)
+        for move in legal:
+            moves.append((move, self._map.get(DirectionalLocation(position=position, direction=move).nextPosition).utility))
+        optimalMoves = sorted(moves, key=lambda x: x[1], reverse=True)
+        return optimalMoves[0][0]
 
 class DirectionalLocation():
     """At least two of the three initial parameters should be given"""
@@ -206,7 +308,7 @@ class DirectionalLocation():
             elif self._direction == Directions.STOP:
                 self._nextPosition = self._position
             else:
-                raise NotImplementedError
+                raise NotImplementedError("Unsupported Directional Location")
             return self._nextPosition
 
     @property
@@ -225,9 +327,8 @@ class DirectionalLocation():
             elif self._nextPosition[1] - self._position[1] == -1:
                 self._direction = Directions.SOUTH
             else:
-                raise NotImplementedError
+                raise NotImplementedError("Unsupported Directional Location")
             return self._direction
-
 
     @property
     def position(self):
@@ -245,5 +346,47 @@ class DirectionalLocation():
             elif self._direction == Directions.STOP:
                 self._position = self._nextPosition
             else:
-                raise NotImplementedError
+                raise NotImplementedError("Unsupported Directional Location")
             return self._position
+
+    def adjacentTo(self):
+
+        if self.direction == Directions.EAST or self.direction == Directions.WEST:
+            return [
+                Directions.NORTH,
+                Directions.SOUTH
+            ]
+        elif self.direction == Directions.NORTH or self.direction == Directions.SOUTH:
+            return [
+                Directions.WEST,
+                Directions.EAST
+            ]
+        elif self.direction == Directions.STOP:
+            return [
+                Directions.NORTH,
+                Directions.SOUTH,
+                Directions.EAST,
+                Directions.WEST
+            ]
+        else:
+            raise NotImplementedError("Unsupported Direction: " + str(self._direction))
+
+
+
+
+
+def floatPositionToIntegers(position):
+    if position[0] < math.ceil(position[0]):
+        return [
+            (math.ceil(position[0]), position[1]),
+            (math.floor(position[0]), position[1])
+        ]
+    elif position[1] < math.ceil(position[1]):
+        return [
+            (position[0], math.ceil(position[1])),
+            (position[0], math.floor(position[1]))
+        ]
+    else:
+        return [position]
+
+
